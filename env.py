@@ -71,7 +71,7 @@ class Env(object):
         #     sim_params.headless = True
         
         self.gym = gymapi.acquire_gym()
-        self.sim = self.gym.create_sim(compute_device, graphics_device, gymapi.SIM_PHYSX, sim_params)
+        self.sim = self.gym.create_sim(compute_device, -1, gymapi.SIM_PHYSX, sim_params)
         self.add_ground()
         self.envs, self.actors = self.create_envs(n_envs)
         n_actors_per_env = self.gym.get_actor_count(self.envs[0])
