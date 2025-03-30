@@ -536,12 +536,6 @@ if __name__ == "__main__":
     model.to(device)
     discriminators.to(device)
     model.discriminators = discriminators
-    
-    import signal
-    def ctrl_c_handler(sig, frame):
-        print("Ctrl-C pressed. Exiting gracefully...")
-        env.request_quit = True
-    signal.signal(signal.SIGINT, ctrl_c_handler)
 
     if settings.test:
         if settings.ckpt is not None and os.path.exists(settings.ckpt):
