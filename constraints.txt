@@ -5,4 +5,3 @@ torch==2.1.2
 torch-cuda==11.8  # Note: PyTorch CUDA is typically included in torch package
 scipy==1.10.1
 tensorboard==2.12.1
-opencv-contrib-python==4.11.0.86
