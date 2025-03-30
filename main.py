@@ -1,4 +1,4 @@
-import os, time
+import os, time, sys
 import importlib
 from collections import namedtuple
 
@@ -21,16 +21,30 @@ parser.add_argument("--seed", type=int, default=42,
     help="Random seed.")
 parser.add_argument("--device", type=int, default=0,
     help="ID of the target GPU device for model running.")
-parser.add_argument("--silent", action="store_true", default=False,
+parser.add_argument("--silent", action="store_true", default=False, 
     help="Silent model during training.")
 
-parser.add_argument("--note", type=str, default=None,
+parser.add_argument("--note", type=str, default=None, 
     help="Specific musci note policy training or evaluation.")
 
-parser.add_argument("--left", type=str, default=None,
+parser.add_argument("--left", type=str, default=None, 
     help="Checkpoint directory or file for left-hand policy training or evaluation.")
-parser.add_argument("--right", type=str, default=None,
+parser.add_argument("--right", type=str, default=None, 
     help="Checkpoint directory or file for right-hand policy training or evaluation.")
+
+# New arguments for headless rendering
+parser.add_argument("--headless", action="store_true", default=False,
+    help="Run in headless mode without GUI.")
+parser.add_argument("--record", type=str, default=None,
+    help="Record video to the specified file path (requires --headless).")
+parser.add_argument("--width", type=int, default=1280,
+    help="Width of the recorded video.")
+parser.add_argument("--height", type=int, default=720,
+    help="Height of the recorded video.")
+parser.add_argument("--frames", type=int, default=1800,
+    help="Number of frames to record.")
+parser.add_argument("--fps", type=int, default=30,
+    help="Frames per second for the recorded video.")
 
 settings = parser.parse_args()
 
@@ -55,6 +69,25 @@ def test(env, model):
     model.eval()
     env.eval()
     env.reset()
+    
+    # Handle headless recording mode
+    if hasattr(env, 'headless') and env.headless and settings.record:
+        print(f"Recording video to {settings.record}")
+        try:
+            env.record_video(
+                settings.record, 
+                num_frames=settings.frames, 
+                fps=settings.fps, 
+                width=settings.width, 
+                height=settings.height
+            )
+            print("Recording completed!")
+            return
+        except Exception as e:
+            print(f"Error recording video: {e}")
+            sys.exit(1)
+    
+    # Regular testing code
     accuracy_l, precision_l, recall_l, f1_l = [], [], [], []
     accuracy_r, precision_r, recall_r, f1_r = [], [], [], []
     new = True
@@ -143,7 +176,7 @@ def train(env, model, ckpt_dir, training_params):
             log_probs = log_probs.sum(-1, keepdim=True)
             not_done = (~dones).unsqueeze_(-1)
             terminate = info["terminate"]
-
+            
             if env.discriminators:
                 fakes = info["disc_obs"]
                 reals = info["disc_obs_expert"]
@@ -160,7 +193,7 @@ def train(env, model, ckpt_dir, training_params):
                 precision_r.append(info["precision_r"])
                 recall_r.append(info["recall_r"])
                 # f1_r.extend(info["f1_r"])
-
+        
         buffer["s"].append(obs)
         buffer["a"].append(actions)
         buffer["v"].append(values)
@@ -188,7 +221,7 @@ def train(env, model, ckpt_dir, training_params):
                         real_ = torch.cat(data["real"])
                         end_frame = ob_seq_lens # N
 
-                        length = torch.arange(fake.size(1),
+                        length = torch.arange(fake.size(1), 
                             dtype=end_frame.dtype, device=end_frame.device
                         ).unsqueeze_(0)         # 1 x L
                         mask = length <= end_frame.unsqueeze(1)     # N x L
@@ -240,7 +273,7 @@ def train(env, model, ckpt_dir, training_params):
                         # fake_loss.append(score_f.mean().item())
                     disc_optimizer.step()
                     disc_optimizer.zero_grad()
-
+                        
             model.eval()
             with torch.no_grad():
                 terminate = torch.cat(buffer["terminate"])
@@ -283,14 +316,14 @@ def train(env, model, ckpt_dir, training_params):
                 advantages = (rewards - values).add_(values_, alpha=GAMMA)
                 for t in reversed(range(HORIZON-1)):
                     advantages[t].add_(advantages[t+1]*not_done[t], alpha=GAMMA_LAMBDA)
-
+                
                 advantages = advantages.view(-1, advantages.size(-1))
                 returns = advantages + values.view(-1, advantages.size(-1))
 
                 sigma, mu = torch.std_mean(advantages, dim=0, unbiased=True)
                 advantages = (advantages - mu) / (sigma + 1e-8) # (HORIZON x N_ENVS) x N_DISC
-
-                length = torch.arange(env.ob_horizon,
+                
+                length = torch.arange(env.ob_horizon, 
                     dtype=ob_seq_lens.dtype, device=ob_seq_lens.device)
                 mask = length.unsqueeze_(0) < ob_seq_lens.unsqueeze(1)
                 states_raw = model.observe(states, norm=False)[0]
@@ -301,7 +334,7 @@ def train(env, model, ckpt_dir, training_params):
                     returns = model.value_normalizer(returns)
                 if multi_critics:
                     advantages.mul_(reward_weights)
-
+                
             n_samples = advantages.size(0)
             epoch += 1
             model.train()
@@ -322,7 +355,7 @@ def train(env, model, ckpt_dir, training_params):
                     ratio = torch.exp(lp_ - lp)
                     clipped_ratio = torch.clamp(ratio, 0.8, 1.2)
                     pg_loss = -torch.min(adv*ratio, adv*clipped_ratio).sum(-1).mean()
-
+                    
                     vf_loss = (v_ - v_t).square().mean()
 
                     loss = pg_loss + 0.5*vf_loss
@@ -355,7 +388,7 @@ def train(env, model, ckpt_dir, training_params):
                     # logger.add_scalar("train/lifetime", env.lifetime.to(torch.float32).mean().item(), epoch)
                     # r = rewards.view(-1, rewards.size(-1)).mean(0).cpu().tolist()
                     # logger.add_scalar("train/reward", np.mean(r), epoch)
-                    # if rewards_task is not None:
+                    # if rewards_task is not None: 
                     #     rewards_task = rewards_task.mean(0).cpu().tolist()
                     #     for i in range(len(rewards_task)):
                     #         logger.add_scalar("train/task_reward_{}".format(i), rewards_task[i], epoch)
@@ -385,7 +418,7 @@ def train(env, model, ckpt_dir, training_params):
                 # f1_l.clear()
             # for v in real_losses.values(): v.clear()
             # for v in fake_losses.values(): v.clear()
-
+            
             if ckpt_dir is not None:
                 state = None
                 if epoch % 500 == 0:
@@ -410,7 +443,7 @@ if __name__ == "__main__":
         spec.loader.exec_module(config)
 
     seed(config.seed if hasattr(config, "seed") else settings.seed)
-
+    
     if hasattr(config, "training_params"):
         TRAINING_PARAMS.update(config.training_params)
     if not TRAINING_PARAMS["save_interval"]:
@@ -428,6 +461,13 @@ if __name__ == "__main__":
         env_cls = env.ICCGANHumanoid
     print(env_cls, config.env_params)
 
+    # Force headless mode if requested
+    if settings.headless:
+        print("Running in headless mode")
+        # Force headless mode by removing DISPLAY environment variable
+        if "DISPLAY" in os.environ:
+            del os.environ["DISPLAY"]
+
     if settings.test:
         num_envs = 1
     else:
@@ -440,11 +480,15 @@ if __name__ == "__main__":
         if settings.test:
             config.env_params["random_note_sampling"] = False
 
+    # Create environment with headless flag if requested
     env = env_cls(num_envs,
         discriminators=discriminators,
         compute_device=settings.device,
+        graphics_device=settings.device,  # Use same device for compute and graphics
+        headless=settings.headless,  # Pass headless flag to environment
         **config.env_params
     )
+    
     value_dim = len(env.discriminators)+env.rew_dim
     model = ACModel(env.state_dim, env.act_dim, env.goal_dim, value_dim)
     discriminators = torch.nn.ModuleDict({
@@ -525,7 +569,7 @@ if __name__ == "__main__":
         # we let the reward weights consistent with the single-hand policy training,
         # i.e. the sum of weights are 2 instead of 1
         # this modification is trivial because we will perform grad clipping during training.
-        env.reward_weights *= 2
+        env.reward_weights *= 2 
         model.actor = AdaptNet(model, left_policy, right_policy)
     elif "Left" in env_cls.__name__ and settings.left and not settings.ckpt:
         settings.ckpt = settings.left
@@ -553,3 +597,4 @@ if __name__ == "__main__":
         test(env, model)
     else:
         train(env, model, settings.ckpt, training_params)
+                
