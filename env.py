@@ -67,7 +67,7 @@ class Env(object):
         
         # Configure headless mode
         if self.headless:
-            sim_params.enable_cameras = True
+            # sim_params.enable_cameras = True
             sim_params.headless = True
         
         self.gym = gymapi.acquire_gym()
