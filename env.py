@@ -24,6 +24,62 @@ class DiscriminatorConfig(object):
         self.ob_horizon = ob_horizon
         self.weight = weight
 
+class HeadlessEnv(Env):
+    def __init__(self, *args, **kwargs):
+        # Call parent initialization
+        super().__init__(*args, **kwargs)
+        
+        # Instead of creating a viewer, we create an offscreen camera sensor.
+        # Configure the camera properties (resolution, near/far, etc.)
+        camera_props = gymapi.CameraProperties()
+        camera_props.width = 640
+        camera_props.height = 480
+        camera_props.enable_tensors = True  # if available, so that images can be accessed as tensors
+        
+        # Create a camera sensor attached to the simulation.
+        # (Assuming create_camera_sensor is available in your IsaacGym version.)
+        self.camera_handle = self.gym.create_camera_sensor(self.sim, camera_props)
+        
+        # Set up a video writer to record frames.
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        self.video_writer = cv2.VideoWriter('output.mp4', fourcc, self.fps, (camera_props.width, camera_props.height))
+        
+    # Override the render method to do nothing since we are headless.
+    def render(self):
+        # Do nothing: no viewer window is created.
+        pass
+
+    # Override the update_viewer method to avoid any GUI operations.
+    def update_viewer(self):
+        # Instead of polling a viewer, we could optionally update the camera sensor if needed.
+        pass
+
+    # Override step() so that after simulation stepping we capture an image.
+    def step(self, actions):
+        obs, rewards, done, info = super().step(actions)
+        
+        # Capture an offscreen image from the camera sensor.
+        # Note: get_camera_image() is an example API call; refer to your docs for the exact call.
+        frame = self.gym.get_camera_image(self.sim, self.camera_handle)
+        # Ensure the frame is in uint8 format and shape (height, width, 3) for OpenCV.
+        if frame.dtype != 'uint8':
+            frame = frame.astype('uint8')
+        
+        # Write the captured frame to the video file.
+        self.video_writer.write(frame)
+        
+        return obs, rewards, done, info
+
+    # Make sure to clean up resources when the simulation ends.
+    def close(self):
+        if self.video_writer is not None:
+            self.video_writer.release()
+        if self.camera_handle is not None:
+            self.gym.destroy_camera_sensor(self.sim, self.camera_handle)
+        # Call parent's cleanup if necessary.
+        if hasattr(super(), "close"):
+            super().close()
+
 class Env(object):
     UP_AXIS = 2
     CHARACTER_MODEL = None
