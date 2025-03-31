@@ -454,7 +454,7 @@ class HeadlessEnv(Env):
         
         # Create a camera sensor attached to the simulation.
         # (Assuming create_camera_sensor is available in your IsaacGym version.)
-        self.camera_handle = self.gym.create_camera_sensor(self.sim, camera_props)
+        self.camera_handle = self.gym.create_camera_sensor(self.envs[0], camera_props)
         
         # Set up a video writer to record frames.
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
