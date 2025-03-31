@@ -476,7 +476,7 @@ class HeadlessEnv(Env):
         
         # Capture an offscreen image from the camera sensor.
         # Note: get_camera_image() is an example API call; refer to your docs for the exact call.
-        frame = self.gym.get_camera_image(self.sim, self.camera_handle)
+        frame = self.gym.get_camera_image(self.sim, self.envs[0], self.camera_handle, gymapi.IMAGE_COLOR)
         # Ensure the frame is in uint8 format and shape (height, width, 3) for OpenCV.
         if frame.dtype != 'uint8':
             frame = frame.astype('uint8')
