@@ -439,65 +439,80 @@ class Env(object):
         return torch.ones((len(self.envs), 0), dtype=torch.float32, device=self.device)
 
 import cv2
+import numpy as np
 
 class HeadlessEnv(Env):
     def __init__(self, *args, **kwargs):
-        # Call parent initialization
+        # Call parent initialization; ensure the simulation was created with graphics_device=0.
         super().__init__(*args, **kwargs)
         
-        # Create an offscreen camera sensor using one of the environments.
+        # Set up camera properties for offscreen rendering.
+        self.cam_width = 1280
+        self.cam_height = 720
         camera_props = gymapi.CameraProperties()
-        camera_props.width = 640
-        camera_props.height = 480
-        camera_props.enable_tensors = True  # if available
+        camera_props.width = self.cam_width
+        camera_props.height = self.cam_height
+        camera_props.enable_tensors = True  # if you need tensor access
         
-        # Use the first environment for the camera sensor.
+        # Create the camera sensor on one of your environments (e.g. the first one).
         self.camera_handle = self.gym.create_camera_sensor(self.envs[0], camera_props)
         
-        # Set up an OpenCV VideoWriter for output.
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        self.video_writer = cv2.VideoWriter('output.mp4', fourcc, self.fps, (camera_props.width, camera_props.height))
+        # Set the camera location and target.
+        # (Adjust these vectors as needed for your scene.)
+        camera_position = gymapi.Vec3(2.0, 2.0, 2.0)
+        camera_target = gymapi.Vec3(0.0, 0.0, 0.0)
+        self.gym.set_camera_location(self.camera_handle, self.envs[0], camera_position, camera_target)
         
-        # Set up a frame counter to stop after a few frames.
-        self.frame_counter = 0
-        self.max_frames = 10  # For testing, capture 10 frames
-
-    # Override render and update_viewer to do nothing in headless mode.
+        # Set up OpenCV video writer.
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 'mp4v' codec in lowercase
+        self.video_writer = cv2.VideoWriter('output.mp4', fourcc, self.fps, (self.cam_width, self.cam_height))
+    
+    # Override render to do nothing (no desktop window).
     def render(self):
         pass
-
+    
+    # Override update_viewer to do nothing in headless mode.
     def update_viewer(self):
         pass
-
-
+    
+    # Override step() to capture a frame each step.
     def step(self, actions):
         obs, rewards, dones, info = super().step(actions)
         
-        # Step the graphics and fetch results
+        # Step the graphics pipeline and fetch results so that the offscreen buffer updates.
         self.gym.step_graphics(self.sim)
         self.gym.fetch_results(self.sim, True)
-        
-        # Force the offscreen camera sensor to update its render buffer
         self.gym.render_all_camera_sensors(self.sim)
         
-        # Now capture the image from the offscreen camera sensor.
-        frame = self.gym.get_camera_image(self.sim, self.envs[0], self.camera_handle, gymapi.IMAGE_COLOR)
+        # Retrieve the camera image.
+        # The API requires: (sim, env, camera_handle, image_type)
+        img = self.gym.get_camera_image(self.sim, self.envs[0], self.camera_handle, gymapi.IMAGE_COLOR)
         
-        print("Captured frame with shape:", frame.shape)
+        # IsaacGym returns a flat buffer (likely in RGBA format).
+        # Reshape the image to (height, width, 4).
+        try:
+            frame_rgba = np.array(img).reshape((self.cam_height, self.cam_width, 4))
+        except Exception as e:
+            print("Error reshaping image:", e)
+            frame_rgba = np.zeros((self.cam_height, self.cam_width, 4), dtype=np.uint8)
         
-        if frame.dtype != 'uint8':
-            frame = frame.astype('uint8')
-        self.video_writer.write(frame)
+        # Convert RGBA to BGR for OpenCV.
+        frame_bgr = cv2.cvtColor(frame_rgba, cv2.COLOR_RGBA2BGR)
+        
+        # Print out the frame shape for verification.
+        print("Captured frame with shape:", frame_bgr.shape)
+        
+        # Write the frame to the video.
+        self.video_writer.write(frame_bgr)
         
         return obs, rewards, dones, info
-
+    
+    # Release resources.
     def close(self):
-        # Clean up the video writer and camera sensor.
         if self.video_writer is not None:
             self.video_writer.release()
         if self.camera_handle is not None:
             self.gym.destroy_camera_sensor(self.envs[0], self.camera_handle)
-        # Call parent's cleanup if available.
         if hasattr(super(), "close"):
             super().close()
 
