@@ -469,20 +469,22 @@ class HeadlessEnv(Env):
     def update_viewer(self):
         pass
 
+
     def step(self, actions):
         obs, rewards, dones, info = super().step(actions)
         
-        # Update graphics pipeline to refresh the offscreen render buffer.
+        # Step the graphics and fetch results
         self.gym.step_graphics(self.sim)
         self.gym.fetch_results(self.sim, True)
         
-        # Retrieve the offscreen image from the camera sensor.
+        # Force the offscreen camera sensor to update its render buffer
+        self.gym.render_all_camera_sensors(self.sim)
+        
+        # Now capture the image from the offscreen camera sensor.
         frame = self.gym.get_camera_image(self.sim, self.envs[0], self.camera_handle, gymapi.IMAGE_COLOR)
         
-        # Print a confirmation message with the frame's shape.
         print("Captured frame with shape:", frame.shape)
         
-        # Ensure the frame is in uint8 format and write it to the video.
         if frame.dtype != 'uint8':
             frame = frame.astype('uint8')
         self.video_writer.write(frame)
