@@ -470,21 +470,20 @@ class HeadlessEnv(Env):
         pass
 
     def step(self, actions):
-        # Step the simulation using the parent step() method.
         obs, rewards, dones, info = super().step(actions)
         
-        # Capture an offscreen image.
+        # Update graphics pipeline to refresh the camera sensor's image buffer.
+        self.gym.step_graphics(self.sim)
+        # Optionally fetch results if required.
+        self.gym.fetch_results(self.sim, True)
+        
+        # Now retrieve the camera image with the correct arguments.
         frame = self.gym.get_camera_image(self.sim, self.envs[0], self.camera_handle, gymapi.IMAGE_COLOR)
+        
+        # Convert frame to uint8 if necessary, and write to the video.
         if frame.dtype != 'uint8':
             frame = frame.astype('uint8')
         self.video_writer.write(frame)
-        
-        # Increment frame counter and check if we've reached the max frame count.
-        self.frame_counter += 1
-        if self.frame_counter >= self.max_frames:
-            # Signal termination for all environments.
-            dones = [True] * len(self.envs)
-            print("Captured maximum frames. Terminating simulation.")
         
         return obs, rewards, dones, info
 
