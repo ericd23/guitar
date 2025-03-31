@@ -499,7 +499,7 @@ from ref_motion import ReferenceMotion
 import numpy as np
 
 
-class ICCGANHumanoid(Env):
+class ICCGANHumanoid(HeadlessEnv):
 
     CHARACTER_MODEL = "assets/humanoid.xml"
     CONTACTABLE_LINKS = ["right_foot", "left_foot"]
