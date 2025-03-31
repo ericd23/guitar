@@ -445,54 +445,56 @@ class HeadlessEnv(Env):
         # Call parent initialization
         super().__init__(*args, **kwargs)
         
-        # Instead of creating a viewer, we create an offscreen camera sensor.
-        # Configure the camera properties (resolution, near/far, etc.)
+        # Create an offscreen camera sensor using one of the environments.
         camera_props = gymapi.CameraProperties()
         camera_props.width = 640
         camera_props.height = 480
-        camera_props.enable_tensors = True  # if available, so that images can be accessed as tensors
+        camera_props.enable_tensors = True  # if available
         
-        # Create a camera sensor attached to the simulation.
-        # (Assuming create_camera_sensor is available in your IsaacGym version.)
+        # Use the first environment for the camera sensor.
         self.camera_handle = self.gym.create_camera_sensor(self.envs[0], camera_props)
         
-        # Set up a video writer to record frames.
+        # Set up an OpenCV VideoWriter for output.
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         self.video_writer = cv2.VideoWriter('output.mp4', fourcc, self.fps, (camera_props.width, camera_props.height))
         
-    # Override the render method to do nothing since we are headless.
+        # Set up a frame counter to stop after a few frames.
+        self.frame_counter = 0
+        self.max_frames = 10  # For testing, capture 10 frames
+
+    # Override render and update_viewer to do nothing in headless mode.
     def render(self):
-        # Do nothing: no viewer window is created.
         pass
 
-    # Override the update_viewer method to avoid any GUI operations.
     def update_viewer(self):
-        # Instead of polling a viewer, we could optionally update the camera sensor if needed.
         pass
 
-    # Override step() so that after simulation stepping we capture an image.
     def step(self, actions):
-        obs, rewards, done, info = super().step(actions)
+        # Step the simulation using the parent step() method.
+        obs, rewards, dones, info = super().step(actions)
         
-        # Capture an offscreen image from the camera sensor.
-        # Note: get_camera_image() is an example API call; refer to your docs for the exact call.
+        # Capture an offscreen image.
         frame = self.gym.get_camera_image(self.sim, self.envs[0], self.camera_handle, gymapi.IMAGE_COLOR)
-        # Ensure the frame is in uint8 format and shape (height, width, 3) for OpenCV.
         if frame.dtype != 'uint8':
             frame = frame.astype('uint8')
-        
-        # Write the captured frame to the video file.
         self.video_writer.write(frame)
         
-        return obs, rewards, done, info
+        # Increment frame counter and check if we've reached the max frame count.
+        self.frame_counter += 1
+        if self.frame_counter >= self.max_frames:
+            # Signal termination for all environments.
+            dones = [True] * len(self.envs)
+            print("Captured maximum frames. Terminating simulation.")
+        
+        return obs, rewards, dones, info
 
-    # Make sure to clean up resources when the simulation ends.
     def close(self):
+        # Clean up the video writer and camera sensor.
         if self.video_writer is not None:
             self.video_writer.release()
         if self.camera_handle is not None:
-            self.gym.destroy_camera_sensor(self.sim, self.camera_handle)
-        # Call parent's cleanup if necessary.
+            self.gym.destroy_camera_sensor(self.envs[0], self.camera_handle)
+        # Call parent's cleanup if available.
         if hasattr(super(), "close"):
             super().close()
 
