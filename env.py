@@ -1461,7 +1461,7 @@ class ICCGANLeftHand(ICCGANHandBase):
     def reset_goal_random(self, env_ids=None):
         raise NotImplementedError("Random goal generation for left hand policy has not been implemented.")
 
-    def update_goal_tensor(self, env_ids=None):
+    def update_goal_tensor(self, env_ids):
         if env_ids is None:
             env_ids = slice(None)
             env_idsx = self.arange_tensor[:len(self.envs)]
@@ -1471,9 +1471,15 @@ class ICCGANLeftHand(ICCGANHandBase):
         self.goal_t_[env_ids] += 1
         next_note = self.goal_t[env_ids, 0] <= 0
         self.goal_cursor[env_ids] += next_note
-        cursor = self.goal_cursor[env_ids]
 
-        next_note.unsqueeze_(-1)
+        # --- New check: end testing if notes run out ---
+        if torch.any(self.goal_cursor[env_ids] >= self.note_length_ext):
+            self.request_quit = True
+            return
+        # --------------------------------------------------
+
+        cursor = self.goal_cursor[env_ids]
+        next_note = next_note.unsqueeze_(-1)
         not_next_note = ~next_note
         tar = self.goal_tensor[env_ids, self.n_strings:].clone()
         self.goal_tensor[env_ids, :-self.n_strings] *= not_next_note
@@ -1482,10 +1488,9 @@ class ICCGANLeftHand(ICCGANHandBase):
         self.goal_t[env_ids, :-1] *= not_next_note
         self.goal_t[env_ids, :-1] += next_note * tar
         self.goal_t_[env_ids] *= not_next_note.squeeze_(-1)
-
-        tar = torch.fmod(self.goal_track[env_idsx, cursor], 100) # remove effects
-        self.goal_tensor[env_ids, -self.n_strings:] = tar+self.goal_pitch_adjust[env_ids]*(tar>0)
-        self.goal_t[env_ids, -1] = self.goal_note_t[env_idsx, cursor]
+        tar = torch.fmod(self.goal_track[env_idsx, cursor], 100)
+        self.goal_tensor[env_ids, -self.n_strings:] = tar + self.goal_pitch_adjust[env_ids] * (tar > 0)
+        self.goal_t[env_ids, -1] = self.goal_note_t[env_ids, cursor]
 
     def observe_goal(self, env_ids):
         if env_ids is None:
@@ -1902,15 +1907,21 @@ class ICCGANRightHand(ICCGANHandBase):
                 self.update_goal_tensor(restart)
 
     def update_goal_tensor(self, env_ids=None):
-        if env_ids is None: env_ids = slice(None)
+        if env_ids is None:
+            env_ids = slice(None)
         self.goal_t[env_ids, 0] -= 1
         self.goal_t_[env_ids] += 1
-
         next_note = self.goal_t[env_ids, 0] <= 0
         self.goal_cursor[env_ids] += next_note
-        cursor = self.goal_cursor[env_ids]
 
-        next_note.unsqueeze_(-1)
+        # --- New check: end testing if notes run out ---
+        if torch.any(self.goal_cursor[env_ids] >= self.note_length_ext):
+            self.request_quit = True
+            return
+        # --------------------------------------------------
+
+        cursor = self.goal_cursor[env_ids]
+        next_note = next_note.unsqueeze_(-1)
         not_next_note = ~next_note
         tar = self.goal_tensor[env_ids, self.n_strings:].clone()
         self.goal_tensor[env_ids, :-self.n_strings] *= not_next_note
@@ -1919,7 +1930,6 @@ class ICCGANRightHand(ICCGANHandBase):
         self.goal_t[env_ids, :-1] *= not_next_note
         self.goal_t[env_ids, :-1] += next_note * tar
         self.goal_t_[env_ids] *= not_next_note.squeeze_(-1)
-
         env_ids = self.arange_tensor[:len(self.envs)][env_ids]
         self.goal_tensor[env_ids, -self.n_strings:] = self.goal_track[env_ids, cursor]
         self.goal_t[env_ids, -1] = self.goal_note_t[env_ids, cursor]
@@ -2170,7 +2180,6 @@ class ICCGANTwoHands(ICCGANHandBase):
         self.goal_tensor_right = torch.zeros_like(self.goal_tensor, dtype=torch.bool)
 
     def update_goal_tensor(self, env_ids=None):
-        # a combination of LeftHand.update_goal_tensor and RightHand.update_goal_tensor
         if env_ids is None:
             env_ids = slice(None)
             env_idsx = self.arange_tensor[:len(self.envs)]
@@ -2180,9 +2189,15 @@ class ICCGANTwoHands(ICCGANHandBase):
         self.goal_t_[env_ids] += 1
         next_note = self.goal_t[env_ids, 0] <= 0
         self.goal_cursor[env_ids] += next_note
-        cursor = self.goal_cursor[env_ids]
 
-        next_note.unsqueeze_(-1)
+        # --- New check: end testing if notes run out ---
+        if torch.any(self.goal_cursor[env_ids] >= self.note_length_ext):
+            self.request_quit = True
+            return
+        # --------------------------------------------------
+
+        cursor = self.goal_cursor[env_ids]
+        next_note = next_note.unsqueeze_(-1)
         not_next_note = ~next_note
         tar = self.goal_tensor[env_ids, self.n_strings:].clone()
         self.goal_tensor[env_ids, :-self.n_strings] *= not_next_note
@@ -2194,27 +2209,10 @@ class ICCGANTwoHands(ICCGANHandBase):
         self.goal_tensor_right[env_ids, :-self.n_strings] *= not_next_note
         self.goal_tensor_right[env_ids, :-self.n_strings] += next_note * tar
         self.goal_t_[env_ids] *= not_next_note.squeeze_(-1)
-
         tar_effect = self.goal_track[env_idsx, cursor]
-        tar = torch.fmod(tar_effect, 100) # remove effects
-        t = self.goal_note_t[env_idsx, cursor]
-
-        tar_left = tar + self.goal_pitch_adjust[env_ids]*(tar>0)
-        self.goal_tensor[env_ids, -self.n_strings:] = tar_left
-        self.goal_t[env_ids, -1] = t
-
-        # remove left-only effect notes
-        tar_effect = torch.abs(tar_effect) // 100
-        left_note = tar_effect % 2
-        tar_right = tar * (1-left_note)
-        # fill in holes
-        goal_r = tar_right != 0
-        string_arange = self.arange_tensor[:goal_r.size(-1)]
-        tar_string = goal_r * string_arange
-        goal_r = (string_arange >= torch.argmin(tar_string+100*(~goal_r), dim=-1, keepdim=True)) * \
-                 (string_arange <= torch.argmax(tar_string, dim=-1, keepdim=True)) * \
-                 torch.any(goal_r, -1, keepdim=True)
-        self.goal_tensor_right[env_ids, -self.n_strings:] = goal_r
+        tar = torch.fmod(tar_effect, 100)
+        self.goal_tensor[env_ids, -self.n_strings:] = tar + self.goal_pitch_adjust[env_ids] * (tar > 0)
+        self.goal_t[env_ids, -1] = self.goal_note_t[env_idsx, cursor]
 
     def observe_goal(self, env_ids):
         if env_ids is None:
