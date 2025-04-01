@@ -460,8 +460,8 @@ class HeadlessEnv(Env):
         # Change the camera position to be closer to the guitar.
         # For example, if the guitar is near the origin, move the camera closer.
         # Adjust these vectors as needed.
-        camera_position = gymapi.Vec3(1.0, 1.0, 1.2)  # Closer than (2.0, 2.0, 2.0)
-        camera_target = gymapi.Vec3(0.0, 0.0, 0.0)      # Assuming the guitar is at the origin
+        camera_position = gymapi.Vec3(0.5, 0.5, 1.2)  # Closer than (2.0, 2.0, 2.0)
+        camera_target = gymapi.Vec3(0.0, 0.0, 0.6)      # Assuming the guitar is at the origin
         self.gym.set_camera_location(self.camera_handle, self.envs[0], camera_position, camera_target)
         
         # Set up OpenCV video writer with the new resolution.
