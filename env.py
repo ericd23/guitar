@@ -446,9 +446,9 @@ class HeadlessEnv(Env):
         # Call parent initialization; ensure the simulation was created with graphics_device=0.
         super().__init__(*args, **kwargs)
         
-        # Set up camera properties for offscreen rendering.
-        self.cam_width = 1280
-        self.cam_height = 720
+        # Increase resolution: set to Full HD 1920x1080.
+        self.cam_width = 1920
+        self.cam_height = 1080
         camera_props = gymapi.CameraProperties()
         camera_props.width = self.cam_width
         camera_props.height = self.cam_height
@@ -457,13 +457,14 @@ class HeadlessEnv(Env):
         # Create the camera sensor on one of your environments (e.g. the first one).
         self.camera_handle = self.gym.create_camera_sensor(self.envs[0], camera_props)
         
-        # Set the camera location and target.
-        # (Adjust these vectors as needed for your scene.)
-        camera_position = gymapi.Vec3(2.0, 2.0, 2.0)
-        camera_target = gymapi.Vec3(0.0, 0.0, 0.0)
+        # Change the camera position to be closer to the guitar.
+        # For example, if the guitar is near the origin, move the camera closer.
+        # Adjust these vectors as needed.
+        camera_position = gymapi.Vec3(1.0, 1.0, 1.2)  # Closer than (2.0, 2.0, 2.0)
+        camera_target = gymapi.Vec3(0.0, 0.0, 0.0)      # Assuming the guitar is at the origin
         self.gym.set_camera_location(self.camera_handle, self.envs[0], camera_position, camera_target)
         
-        # Set up OpenCV video writer.
+        # Set up OpenCV video writer with the new resolution.
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 'mp4v' codec in lowercase
         self.video_writer = cv2.VideoWriter('output.mp4', fourcc, self.fps, (self.cam_width, self.cam_height))
     
