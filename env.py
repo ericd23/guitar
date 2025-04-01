@@ -501,7 +501,7 @@ class HeadlessEnv(Env):
         frame_bgr = cv2.cvtColor(frame_rgba, cv2.COLOR_RGBA2BGR)
         
         # Print out the frame shape for verification.
-        print("Captured frame with shape:", frame_bgr.shape)
+        # print("Captured frame with shape:", frame_bgr.shape)
         
         # Write the frame to the video.
         self.video_writer.write(frame_bgr)
