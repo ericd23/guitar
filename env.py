@@ -444,6 +444,7 @@ import numpy as np
 class HeadlessEnv(Env):
     def __init__(self, *args, **kwargs):
         # Call parent initialization; ensure the simulation was created with graphics_device=0.
+        record = kwargs.pop('record', None)
         super().__init__(*args, **kwargs)
         
         # Increase resolution: set to Full HD 1920x1080.
@@ -467,6 +468,10 @@ class HeadlessEnv(Env):
         # Set up OpenCV video writer with the new resolution.
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 'mp4v' codec in lowercase
         self.video_writer = cv2.VideoWriter('output.mp4', fourcc, self.fps, (self.cam_width, self.cam_height))
+        self.video_writer = None
+        if record is not None:
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            self.video_writer = cv2.VideoWriter(record, fourcc, self.fps, (self.cam_width, self.cam_height))
     
     # Override render to do nothing (no desktop window).
     def render(self):

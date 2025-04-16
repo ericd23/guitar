@@ -31,6 +31,10 @@ parser.add_argument("--left", type=str, default=None,
     help="Checkpoint directory or file for left-hand policy training or evaluation.")
 parser.add_argument("--right", type=str, default=None,
     help="Checkpoint directory or file for right-hand policy training or evaluation.")
+parser.add_argument("--headless", action="store_true", default=False,
+    help="Run in headless mode with no viewer window.")
+parser.add_argument("--record", type=str, default=None,
+    help="Output .mp4 file to record the environment in headless mode.")
 
 settings = parser.parse_args()
 
@@ -428,6 +432,9 @@ if __name__ == "__main__":
         env_cls = env.ICCGANHumanoid
     print(env_cls, config.env_params)
 
+    if settings.record and not settings.headless:
+        raise ValueError("--record requires --headless. Please use both.")
+
     if settings.test:
         num_envs = 1
     else:
@@ -443,6 +450,7 @@ if __name__ == "__main__":
     env = env_cls(num_envs,
         discriminators=discriminators,
         compute_device=settings.device,
+        record=settings.record,
         **config.env_params
     )
     value_dim = len(env.discriminators)+env.rew_dim
@@ -550,6 +558,8 @@ if __name__ == "__main__":
                 state_dict = torch.load(ckpt, map_location=torch.device(settings.device))
                 model.load_state_dict(state_dict["model"], strict=False)
         env.render()
+        if not settings.headless:
+            env.render()
         test(env, model)
     else:
         train(env, model, settings.ckpt, training_params)
