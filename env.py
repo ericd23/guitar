@@ -662,12 +662,15 @@ class HeadlessEnv(Env):
         # Check camera handle exists and is valid before destroying
         if hasattr(self, 'camera_handle') and self.camera_handle is not None and self.camera_handle != gymapi.INVALID_HANDLE:
             # Check if envs list exists and is not empty (needed for destroy call)
-            if hasattr(self, 'envs') and self.envs:
+            if hasattr(self, 'envs') and self.envs and hasattr(self, 'sim') and self.sim is not None: # <<< Added check for sim
                 try:
                     print("Destroying camera sensor...")
-                    self.gym.destroy_camera_sensor(self.envs[0], self.camera_handle)
+                    # <<< MODIFIED: Added self.sim as the first argument >>>
+                    self.gym.destroy_camera_sensor(self.sim, self.envs[0], self.camera_handle)
                 except Exception as e:
                     print(f"Error destroying camera sensor: {e}")
+            else:
+                 print("Skipping camera sensor destruction (env/sim not available).")
             self.camera_handle = None # Mark as destroyed
 
         # Call parent's close method to clean up sim, etc.
