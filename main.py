@@ -32,6 +32,19 @@ parser.add_argument("--left", type=str, default=None,
 parser.add_argument("--right", type=str, default=None,
     help="Checkpoint directory or file for right-hand policy training or evaluation.")
 
+parser.add_argument("--headless", action="store_true", default=False,
+                    help="Run in headless mode with no viewer window.")
+parser.add_argument("--record", type=str, default=None,
+                    help="Output .mp4 file to record the environment in headless mode.")
+parser.add_argument("--width", type=int, default=1920, # Default width
+                    help="Output video width in pixels for headless recording.")
+parser.add_argument("--height", type=int, default=1080, # Default height
+                    help="Output video height in pixels for headless recording.")
+parser.add_argument("--frames", type=int, default=None, # No default frame limit
+                    help="Total number of frames to simulate and record in headless mode.")
+parser.add_argument("--fps", type=int, default=60, # Default FPS
+                    help="Recording frame rate (frames per second) for headless recording. Also affects simulation dt if recording.")
+
 settings = parser.parse_args()
 
 TRAINING_PARAMS = dict(
@@ -51,38 +64,103 @@ TRAINING_PARAMS = dict(
     control_mode = "position",
 )
 
-def test(env, model):
+def test(env, model, total_frames=None): # Add total_frames parameter
     model.eval()
     env.eval()
     env.reset()
-    accuracy_l, precision_l, recall_l, f1_l = [], [], [], []
-    accuracy_r, precision_r, recall_r, f1_r = [], [], [], []
-    new = True
-    nn = 0
-    while not env.request_quit:
-        obs, info = env.reset_done()
-        if new:
-            nn += 1
-            if precision_l:
-                print(nn-1, "L", "{:.4f}, {:.4f}, {:.4f}".format(accuracy_l[-1], precision_l[-1], recall_l[-1]))
-            if precision_r:
-                print(nn-1, "R", "{:.4f}, {:.4f}, {:.4f}".format(accuracy_r[-1], precision_r[-1], recall_r[-1]))
-            new = False
-        seq_len = info["ob_seq_lens"]
-        actions = model.act(obs, seq_len-1)
-        obs_, rews, dones, info = env.step(actions)
-        if "precision_l" in info and info["precision_l"].numel() > 0:
-            accuracy_l.extend(info["accuracy_l"].cpu().tolist())
-            precision_l.extend(info["precision_l"].cpu().tolist())
-            recall_l.extend(info["recall_l"].cpu().tolist())
-            # f1_l.extend(info["f1"].cpu().tolist())
-            new = True
-        if "precision_r" in info and info["precision_r"].numel() > 0:
-            accuracy_r.extend(info["accuracy_r"].cpu().tolist())
-            precision_r.extend(info["precision_r"].cpu().tolist())
-            recall_r.extend(info["recall_r"].cpu().tolist())
-            # f1_l.extend(info["f1"].cpu().tolist())
-            new = True
+    # Initialize lists to store metrics *since last print*
+    accuracy_l, precision_l, recall_l = [], [], []
+    accuracy_r, precision_r, recall_r = [], [], []
+    metrics_ready_to_print = False # Flag to print on next iteration after collecting
+    nn = 0 # Note/Reset counter
+    frame_count = 0 # <<< Initialize frame counter
+
+    print("Starting evaluation loop...")
+    if total_frames:
+        print(f"Will stop after {total_frames} frames.")
+
+    try: # Use try/finally to ensure env.close() is called
+        while not env.request_quit: # Use env.request_quit for potential external close signals
+            # --- (Metric printing logic remains the same) ---
+            if metrics_ready_to_print:
+                 metrics_printed_this_cycle = False
+                 if precision_l: # Check if list has data
+                     print(f"{nn} L Acc: {np.mean(accuracy_l):.4f}, Prec: {np.mean(precision_l):.4f}, Rec: {np.mean(recall_l):.4f}")
+                     accuracy_l.clear(); precision_l.clear(); recall_l.clear() # Clear after printing
+                     metrics_printed_this_cycle = True
+                 if precision_r: # Check if list has data
+                     print(f"{nn} R Acc: {np.mean(accuracy_r):.4f}, Prec: {np.mean(precision_r):.4f}, Rec: {np.mean(recall_r):.4f}")
+                     accuracy_r.clear(); precision_r.clear(); recall_r.clear() # Clear after printing
+                     metrics_printed_this_cycle = True
+                 if metrics_printed_this_cycle:
+                      metrics_ready_to_print = False # Reset flag
+
+
+            obs, info = env.reset_done()
+            dones_tensor = env.done # Get done status *after* reset_done
+
+            # Increment note counter if a reset occurred (assuming 1 env in test)
+            if dones_tensor.numel() > 0 and dones_tensor[0]:
+                 nn += 1
+                 # print(f"Environment reset detected. Note counter: {nn}") # Optional debug
+
+
+            seq_len = info["ob_seq_lens"]
+            # Get deterministic actions in test mode
+            with torch.no_grad():
+                 actions = model.act(obs, seq_len-1, stochastic=False)
+
+            # <<< Step the environment >>>
+            # Note: env.step() in HeadlessEnv now also handles frame writing
+            obs_, rews, dones, info = env.step(actions) # dones here is the *new* done status
+
+            # --- (Metric Collection logic remains the same) ---
+            metrics_collected_this_step = False
+            if "accuracy_l" in info and info["accuracy_l"].numel() > 0:
+                accuracy_l.extend(info["accuracy_l"].cpu().tolist())
+                metrics_collected_this_step = True
+            if "precision_l" in info and info["precision_l"].numel() > 0:
+                precision_l.extend(info["precision_l"].cpu().tolist())
+                metrics_collected_this_step = True
+            if "recall_l" in info and info["recall_l"].numel() > 0:
+                recall_l.extend(info["recall_l"].cpu().tolist())
+                metrics_collected_this_step = True
+
+            if "accuracy_r" in info and info["accuracy_r"].numel() > 0:
+                accuracy_r.extend(info["accuracy_r"].cpu().tolist())
+                metrics_collected_this_step = True
+            if "precision_r" in info and info["precision_r"].numel() > 0:
+                precision_r.extend(info["precision_r"].cpu().tolist())
+                metrics_collected_this_step = True
+            if "recall_r" in info and info["recall_r"].numel() > 0:
+                recall_r.extend(info["recall_r"].cpu().tolist())
+                metrics_collected_this_step = True
+
+            # Set the flag to print metrics on the *next* iteration if collected
+            if metrics_collected_this_step:
+                metrics_ready_to_print = True
+
+            # <<< Increment frame counter >>>
+            frame_count += 1
+
+            # <<< Loop Termination Condition >>>
+            if total_frames is not None and frame_count >= total_frames:
+                print(f"\nReached target frame count: {frame_count}/{total_frames}. Stopping.")
+                break # Exit the while loop
+
+            # Optional: Check for viewer close request even in headless (might be useful?)
+            # Handled by env.request_quit based on super().step() logic
+
+    finally: # Ensure cleanup happens
+        print("Evaluation loop finished or interrupted.")
+        # env.close() will handle releasing video writer etc. via HeadlessEnv.close
+        # Check if env exists and has close method before calling
+        if 'env' in locals() and hasattr(env, 'close') and callable(getattr(env, 'close')):
+             print("Closing environment and releasing resources...")
+             env.close()
+        else:
+             print("Environment does not exist or does not have a close method.")
+# <<< END MODIFIED test() FUNCTION >>>
 
 
 def train(env, model, ckpt_dir, training_params):
@@ -417,34 +495,106 @@ if __name__ == "__main__":
         TRAINING_PARAMS["save_interval"] = TRAINING_PARAMS["max_epochs"]
     print(TRAINING_PARAMS)
     training_params = namedtuple('x', TRAINING_PARAMS.keys())(*TRAINING_PARAMS.values())
+
+    # <<< START MODIFIED ENVIRONMENT INSTANTIATION (main block) >>>
+    env_params_from_config = config.env_params if hasattr(config, "env_params") else {}
+    env_kwargs = env_params_from_config.copy() # Start with config params
+
+    # Check for discriminators in config
+    discriminators_cfg = {}
     if hasattr(config, "discriminators"):
-        discriminators = {
+        # Assuming env.DiscriminatorConfig is defined elsewhere correctly
+        discriminators_cfg = {
             name: env.DiscriminatorConfig(**prop)
             for name, prop in config.discriminators.items()
         }
-    if hasattr(config, "env_cls"):
-        env_cls = getattr(env, config.env_cls)
-    else:
-        env_cls = env.ICCGANHumanoid
-    print(env_cls, config.env_params)
 
+    # Determine env_cls based on config (as before)
+    from env import ICCGANHumanoid
+    if hasattr(config, "env_cls"):
+        # Make sure 'env' module is imported where needed if this is the base script
+        # Assuming env = importlib.import_module("env") or similar is done
+        env_cls_name = config.env_cls
+        try:
+            # Attempt to get the class from the 'env' module or globally
+            if hasattr(env, env_cls_name):
+                env_cls = getattr(env, env_cls_name)
+            else:
+                # Fallback to checking global scope (if env classes are defined in the main script)
+                env_cls = globals()[env_cls_name]
+                # Check if the found object is actually a class
+                import inspect
+                if not inspect.isclass(env_cls):
+                    raise AttributeError
+            print(f"Using environment class from config: {env_cls_name}")
+        except (AttributeError, KeyError):
+            print(f"Warning: Could not find environment class '{env_cls_name}' specified in config. Falling back to default.")
+            # <<< IMPORTANT: Default should now check headless flag >>>
+            # Assuming ICCGANHumanoid is the intended class family
+            # Since ICCGANHumanoid now inherits from HeadlessEnv, we use it directly
+            # but the constructor will handle the headless specifics.
+            env_cls = ICCGANHumanoid # Default Class
+    else:
+        # <<< Default also needs to consider headless >>>
+        env_cls = ICCGANHumanoid # Default Class
+        print(f"Using default environment class: {env_cls.__name__}")
+
+    # --- Add headless/recording specific params to kwargs ---
+    env_kwargs["fps"] = settings.fps # Pass FPS to env constructor
+
+    if settings.headless:
+        env_kwargs["record"] = settings.record # Pass record path only if headless
+        if not settings.record:
+            print("Warning: --headless specified without --record. No video will be saved.")
+        env_kwargs["cam_width"] = settings.width
+        env_kwargs["cam_height"] = settings.height
+        # HeadlessEnv constructor forces graphics_device = compute_device
+        graphics_device_id = settings.device # Use compute device for graphics in headless
+        print("Running in HEADLESS mode.")
+    else:
+        # For GUI mode, graphics device can be different, or None for default behavior
+        graphics_device_id = None # Let IsaacGym manage default GUI window placement or use compute device
+        print("Running in GUI mode.")
+        if settings.record:
+            print("Warning: --record specified without --headless. Recording is only supported in headless mode. Ignoring --record.")
+        # Don't pass record/width/height if not headless
+
+    # Handle --note argument (remains the same)
+    if settings.note is not None:
+        env_kwargs["note_file"] = settings.note
+        if settings.test:
+            env_kwargs["random_note_sampling"] = False
+
+    # Set number of environments and episode length based on test mode
     if settings.test:
         num_envs = 1
-    else:
+        # Use --frames for episode length ONLY if recording, otherwise use a large default
+        if settings.headless and settings.record and settings.frames:
+            env_kwargs["episode_length"] = settings.frames
+            print(f"Setting episode length based on --frames: {settings.frames}")
+        else:
+            env_kwargs["episode_length"] = 500000 # Large default if not recording or no frame limit
+    else: # Training mode
         num_envs = training_params.num_envs
-        if settings.ckpt and (os.path.isfile(settings.ckpt) or os.path.exists(os.path.join(settings.ckpt, "ckpt"))):
-            raise ValueError("Checkpoint folder {} exists. Add `--test` option to run test with an existing checkpoint file".format(settings.ckpt))
+        # Keep the check for existing checkpoint during training
+        if settings.ckpt and not settings.test and \
+           (os.path.isfile(settings.ckpt) or \
+            (os.path.isdir(settings.ckpt) and os.path.exists(os.path.join(settings.ckpt, "ckpt")))):
+            raise ValueError(f"Checkpoint folder {settings.ckpt} exists. Add `--test` option to run test or remove checkpoint.")
 
-    if settings.note is not None:
-        config.env_params["note_file"] = settings.note
-        if settings.test:
-            config.env_params["random_note_sampling"] = False
+    print(f"Instantiating environment: {env_cls.__name__} with {num_envs} environments.")
+    # print(f"Environment Kwargs being passed: {env_kwargs}") # Optional: for debugging
 
-    env = env_cls(num_envs,
-        discriminators=discriminators,
-        compute_device=settings.device,
-        **config.env_params
-    )
+    # --- Instantiate the environment ---
+    # The selected env_cls (e.g., ICCGANHumanoid inheriting from HeadlessEnv)
+    # will handle the specifics based on the passed kwargs.
+    env = env_cls(n_envs=num_envs,
+                  discriminators=discriminators_cfg,
+                  compute_device=settings.device,
+                  graphics_device=graphics_device_id, # Pass determined graphics device
+                  **env_kwargs # Pass all collected kwargs (includes fps, record, width, height if headless)
+                 )
+
     value_dim = len(env.discriminators)+env.rew_dim
     model = ACModel(env.state_dim, env.act_dim, env.goal_dim, value_dim)
     discriminators = torch.nn.ModuleDict({
@@ -538,18 +688,34 @@ if __name__ == "__main__":
     model.discriminators = discriminators
 
     if settings.test:
-        if settings.ckpt is not None and os.path.exists(settings.ckpt):
-            assert os.path.exists(settings.ckpt)
-            if os.path.isdir(settings.ckpt):
-                ckpt = os.path.join(settings.ckpt, "ckpt")
+        if not settings.headless:
+            print("Setting up viewer for GUI mode...")
+            env.render() # Setup viewer only if not headless
+        else:
+            if not settings.record:
+                 print("Running test in headless mode WITHOUT recording.")
             else:
-                ckpt = settings.ckpt
-                settings.ckpt = os.path.dirname(ckpt)
-            if os.path.exists(ckpt):
-                print("Load model from {}".format(ckpt))
-                state_dict = torch.load(ckpt, map_location=torch.device(settings.device))
-                model.load_state_dict(state_dict["model"], strict=False)
-        env.render()
-        test(env, model)
+                 print(f"Running test in headless mode WITH recording to {settings.record}")
+
+        # Pass total frames to test function only if recording and frames are specified
+        total_frames_arg = settings.frames if settings.headless and settings.record and settings.frames is not None else None
+        test(env, model, total_frames=total_frames_arg) # Pass frame limit to test function
     else:
         train(env, model, settings.ckpt, training_params)
+
+    # <<< Explicitly close environment at the very end >>>
+    # Note: test() and train() already have finally blocks with env.close()
+    # This is an extra safeguard in case the script exits differently.
+    print("Script finished. Ensuring environment cleanup...")
+    if "env" in locals() and hasattr(env, "close") and callable(getattr(env, "close")):
+        # Check if it might have already been closed by train/test
+        if (
+            hasattr(env, "sim") and env.sim is not None
+        ):  # Heuristic: check if sim still exists
+            env.close()
+        else:
+            print("Environment seems already closed.")
+    else:
+        print(
+            "Environment variable 'env' not found or has no close method at script end."
+        )

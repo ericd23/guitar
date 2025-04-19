@@ -31,34 +31,52 @@ class Env(object):
     CAMERA_FOLLOWING = True
 
     def __init__(self,
-        n_envs: int, fps: int=30, frameskip: int=2,
-        episode_length: Optional[Union[Callable, int]] = 300,
-        control_mode: str = "position",
-        substeps: int = 2,
-        compute_device: int = 0,
-        graphics_device: Optional[int] = None,
-        character_model: Optional[str] = None,
-        **kwargs
-    ):
+                 n_envs: int,
+                 # <<< MODIFIED: Ensure fps, record, cam_width, cam_height are accepted >>>
+                 fps: int=30, # Default FPS if not specified by caller
+                 frameskip: int=2,
+                 episode_length: Optional[Union[Callable, int]] = 300,
+                 control_mode: str = "position",
+                 substeps: int = 2,
+                 compute_device: int = 0,
+                 graphics_device: Optional[int] = None,
+                 character_model: Optional[str] = None,
+                 # Add record and cam dimensions with defaults that can be overridden
+                 record: Optional[str] = None,
+                 cam_width: int = 1920,
+                 cam_height: int = 1080,
+                 # Discriminators arg is often passed specifically by subclasses
+                 discriminators: Optional[Dict[str, Any]] = None, # Added discriminators here if needed directly
+                 **kwargs # Keep kwargs for other subclass parameters
+                ):
         self.viewer = None
         assert(control_mode in ["position", "torque", "free"])
         self.frameskip = frameskip
-        self.fps = fps
-        self.step_time = 1./self.fps
+        self.fps = fps # <<< Use the passed fps value
+        self.step_time = 1./self.fps # <<< dt calculation uses self.fps
         self.substeps = substeps
         self.control_mode = control_mode
         self.episode_length = episode_length
         self.device = torch.device(compute_device)
         self.camera_pos = self.CAMERA_POS
         self.camera_following = self.CAMERA_FOLLOWING
-        if graphics_device is None:
-            graphics_device = compute_device
+        
+         # <<< IMPORTANT: Headless mode REQUIRES a graphics device ID >>>
+        # Subclass (HeadlessEnv) will handle forcing graphics_device if needed
+        if graphics_device is None and record is not None: # Heuristic: if recording, likely headless
+             print("Warning: Recording requested but no graphics_device specified. Defaulting to compute_device.")
+             graphics_device = compute_device
+        elif graphics_device is None:
+             # If not recording and no graphics device, assume visualization intended on compute device
+             graphics_device = compute_device # Keep original behavior for non-headless GUI
+
         self.character_model = self.CHARACTER_MODEL if character_model is None else character_model
         if type(self.character_model) == str:
             self.character_model = [self.character_model]
 
         sim_params = self.setup_sim_params()
         self.gym = gymapi.acquire_gym()
+
         self.sim = self.gym.create_sim(compute_device, graphics_device, gymapi.SIM_PHYSX, sim_params)
         self.add_ground()
         self.envs, self.actors = self.create_envs(n_envs)
@@ -437,36 +455,137 @@ class Env(object):
 
     def reward(self):
         return torch.ones((len(self.envs), 0), dtype=torch.float32, device=self.device)
+    
+    def close(self):
+        """Closes the simulation and viewer resources."""
+        print("Base Env closing...")
+        if hasattr(self, "viewer") and self.viewer is not None:
+            try:
+                self.gym.destroy_viewer(self.viewer)
+            except Exception as e:
+                print(f"Error destroying viewer: {e}")
+            self.viewer = None
+        if hasattr(self, "sim") and self.sim is not None:
+            try:
+                self.gym.destroy_sim(self.sim)
+            except Exception as e:
+                print(f"Error destroying sim: {e}")
+            self.sim = None
+        print("Base Env closed.")
+        
+    def __del__(self):
+        # This is a fallback, explicit .close() should be used
+        if hasattr(self, 'gym'): # Check if gym was acquired
+             # Avoid calling close() if initialization failed early
+             if hasattr(self, 'sim') and self.sim is not None or hasattr(self, 'viewer') and self.viewer is not None:
+                 print("Env.__del__ called, attempting cleanup...")
+                 self.close()
 
 import cv2
 import numpy as np
 
 class HeadlessEnv(Env):
-    def __init__(self, *args, **kwargs):
-        # Call parent initialization; ensure the simulation was created with graphics_device=0.
-        super().__init__(*args, **kwargs)
-        
-        # Increase resolution: set to Full HD 1920x1080.
-        self.cam_width = 1920
-        self.cam_height = 1080
+    def __init__(self, *args, cam_width=1920, cam_height=1080, **kwargs):
+        """
+        Initializes the headless environment.
+
+        Args:
+            *args: Positional arguments passed to the base Env class.
+            cam_width (int): Width of the camera sensor and output video.
+            cam_height (int): Height of the camera sensor and output video.
+            **kwargs: Keyword arguments passed to the base Env class.
+                      Must include 'record' (path to output file) and 'compute_device'.
+                      May include 'fps'.
+        """
+        record = kwargs.get('record', None) # Get record path
+        if record is None:
+            # This class is specifically for recording in headless mode
+            raise ValueError("HeadlessEnv requires the 'record' keyword argument specifying an output file path.")
+
+        compute_device = kwargs.get('compute_device', 0)
+        # <<< Force graphics_device to be the same as compute_device for headless >>>
+        kwargs['graphics_device'] = compute_device
+
+        # Store camera dimensions before calling super
+        self.cam_width = cam_width
+        self.cam_height = cam_height
+        self.video_writer = None # Initialize video_writer
+
+        print(f"HeadlessEnv Initializing: Resolution={self.cam_width}x{self.cam_height}, Record={record}")
+
+        # Call parent initialization - it will create sim, envs, actors etc.
+        # It will use the fps passed in kwargs if available
+        super().__init__(*args, **kwargs) # *args likely includes n_envs
+
+        # --- Camera Sensor Setup ---
+        # Check if sim was created successfully by the parent
+        if not hasattr(self, 'sim') or self.sim is None:
+            print("Error: Simulation not initialized in HeadlessEnv constructor by super().")
+            # Optionally raise an error: raise RuntimeError("Simulation not initialized")
+            return # Prevent further initialization if sim failed
+
         camera_props = gymapi.CameraProperties()
         camera_props.width = self.cam_width
         camera_props.height = self.cam_height
-        camera_props.enable_tensors = True  # if you need tensor access
-        
-        # Create the camera sensor on one of your environments (e.g. the first one).
+        camera_props.enable_tensors = True # Required for offscreen rendering
+
+        # Ensure envs list exists and is not empty before creating camera
+        if not hasattr(self, 'envs') or not self.envs:
+            print("Error: No environments created before camera sensor setup in HeadlessEnv.")
+            self.camera_handle = None
+            # Optionally raise an error
+            return
+
+        # Create the camera sensor on the first environment
+        print("Creating camera sensor...")
         self.camera_handle = self.gym.create_camera_sensor(self.envs[0], camera_props)
-        
-        # Change the camera position to be closer to the guitar.
-        # For example, if the guitar is near the origin, move the camera closer.
-        # Adjust these vectors as needed.
-        camera_position = gymapi.Vec3(0.5, 0.5, 1.2)  # Closer than (2.0, 2.0, 2.0)
-        camera_target = gymapi.Vec3(0.0, 0.0, 0.6)      # Assuming the guitar is at the origin
+        if self.camera_handle == gymapi.INVALID_HANDLE:
+            print("Error: Failed to create camera sensor.")
+            self.camera_handle = None
+            # Optionally raise an error
+            return # Stop initialization if camera failed
+        print("Camera sensor created.")
+
+        # Set camera location (adjust these values as needed for your scene)
+        # Example: look at the origin from a distance
+        camera_position = gymapi.Vec3(0.5, -1.5, 1.2) # Example position
+        camera_target = gymapi.Vec3(0.0, 0.0, 0.6)    # Example target
         self.gym.set_camera_location(self.camera_handle, self.envs[0], camera_position, camera_target)
-        
-        # Set up OpenCV video writer with the new resolution.
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 'mp4v' codec in lowercase
-        self.video_writer = cv2.VideoWriter('output.mp4', fourcc, self.fps, (self.cam_width, self.cam_height))
+        print(f"Camera location set: pos={camera_position}, target={camera_target}")
+
+        # --- Video Writer Setup ---
+        output_dir = os.path.dirname(record)
+        if output_dir and not os.path.exists(output_dir):
+            try:
+                os.makedirs(output_dir)
+                print(f"Created output directory: {output_dir}")
+            except OSError as e:
+                print(f"Error creating directory {output_dir}: {e}")
+                # Decide how to handle: maybe proceed without recording or raise error
+                self.camera_handle = None # Clean up camera if dir fails
+                self.gym.destroy_camera_sensor(self.envs[0], self.camera_handle)
+                return
+
+        # Use self.fps inherited from Env (set based on --fps argument)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v') # Standard MP4 codec
+        print(f"Initializing VideoWriter: path={record}, fps={self.fps}, resolution=({self.cam_width}, {self.cam_height})")
+        try:
+            self.video_writer = cv2.VideoWriter(record, fourcc, self.fps, (self.cam_width, self.cam_height))
+            if not self.video_writer.isOpened():
+                print(f"Error: Could not open video writer for path {record}. Check codec, path, and permissions.")
+                self.video_writer = None # Ensure it's None if opening failed
+                # Clean up camera if writer fails
+                if self.camera_handle is not None:
+                   self.gym.destroy_camera_sensor(self.envs[0], self.camera_handle)
+                   self.camera_handle = None
+            else:
+                print("Video writer initialized successfully.")
+        except Exception as e:
+             print(f"Exception during VideoWriter initialization: {e}")
+             self.video_writer = None
+             if self.camera_handle is not None:
+                 self.gym.destroy_camera_sensor(self.envs[0], self.camera_handle)
+                 self.camera_handle = None
     
     # Override render to do nothing (no desktop window).
     def render(self):
@@ -478,44 +597,82 @@ class HeadlessEnv(Env):
     
     # Override step() to capture a frame each step.
     def step(self, actions):
+        """
+        Performs a simulation step, renders the frame, and writes to video.
+        """
+        # Call the parent's step method to advance simulation and get results
         obs, rewards, dones, info = super().step(actions)
-        
-        # Step the graphics pipeline and fetch results so that the offscreen buffer updates.
-        self.gym.step_graphics(self.sim)
-        self.gym.fetch_results(self.sim, True)
-        self.gym.render_all_camera_sensors(self.sim)
-        
-        # Retrieve the camera image.
-        # The API requires: (sim, env, camera_handle, image_type)
-        img = self.gym.get_camera_image(self.sim, self.envs[0], self.camera_handle, gymapi.IMAGE_COLOR)
-        
-        # IsaacGym returns a flat buffer (likely in RGBA format).
-        # Reshape the image to (height, width, 4).
-        try:
-            frame_rgba = np.array(img).reshape((self.cam_height, self.cam_width, 4))
-        except Exception as e:
-            print("Error reshaping image:", e)
-            frame_rgba = np.zeros((self.cam_height, self.cam_width, 4), dtype=np.uint8)
-        
-        # Convert RGBA to BGR for OpenCV.
-        frame_bgr = cv2.cvtColor(frame_rgba, cv2.COLOR_RGBA2BGR)
-        
-        # Print out the frame shape for verification.
-        # print("Captured frame with shape:", frame_bgr.shape)
-        
-        # Write the frame to the video.
-        self.video_writer.write(frame_bgr)
-        
+
+        # --- Frame Capture and Writing (only if writer is valid) ---
+        if self.video_writer is not None and self.camera_handle is not None:
+            # Step the graphics pipeline and fetch results for offscreen buffer update.
+            # super().step might already call fetch_results if viewer exists, but ensure it here.
+            self.gym.step_graphics(self.sim)
+            # Fetch results *again* if super().step didn't guarantee it for headless
+            self.gym.fetch_results(self.sim, True) # Fetch results after graphics step
+            # Render all camera sensors to their respective buffers.
+            self.gym.render_all_camera_sensors(self.sim)
+
+            # Retrieve the camera image tensor.
+            # print("Getting camera image...")
+            color_image = self.gym.get_camera_image_gpu_tensor(self.sim, self.envs[0], self.camera_handle, gymapi.IMAGE_COLOR)
+            # print("Got camera image tensor.")
+
+            if color_image is not None:
+                # Transfer tensor to CPU and convert to NumPy array
+                # Important: Image is likely RGBA, uint8
+                frame_rgba_gpu = gymtorch.wrap_tensor(color_image)
+                frame_rgba_cpu = frame_rgba_gpu.cpu().numpy() # Shape (height * width * 4,) or similar flat buffer
+
+                # Reshape and convert RGBA to BGR for OpenCV
+                try:
+                    # Reshape based on camera properties used during creation
+                    frame_rgba = frame_rgba_cpu.reshape((self.cam_height, self.cam_width, 4))
+                    # Convert RGBA -> BGR
+                    frame_bgr = cv2.cvtColor(frame_rgba, cv2.COLOR_RGBA2BGR)
+
+                    # Write the frame to the video file.
+                    # print(f"Writing frame {self.lifetime[0]}") # Example frame counter
+                    self.video_writer.write(frame_bgr)
+
+                except Exception as e:
+                    print(f"Error processing or writing frame: {e}")
+                    # Optionally stop recording on error:
+                    # self.video_writer.release()
+                    # self.video_writer = None
+            else:
+                print("Warning: Failed to get camera image tensor.")
+
         return obs, rewards, dones, info
     
     # Release resources.
     def close(self):
+        """Releases video writer and camera sensor, then calls parent's close."""
+        print("HeadlessEnv closing...")
+        # Release video writer first
         if self.video_writer is not None:
-            self.video_writer.release()
-        if self.camera_handle is not None:
-            self.gym.destroy_camera_sensor(self.envs[0], self.camera_handle)
-        if hasattr(super(), "close"):
-            super().close()
+            print(f"Releasing video writer...")
+            try:
+                self.video_writer.release()
+            except Exception as e:
+                print(f"Error releasing video writer: {e}")
+            self.video_writer = None # Prevent double release
+
+        # Destroy camera sensor
+        # Check camera handle exists and is valid before destroying
+        if hasattr(self, 'camera_handle') and self.camera_handle is not None and self.camera_handle != gymapi.INVALID_HANDLE:
+            # Check if envs list exists and is not empty (needed for destroy call)
+            if hasattr(self, 'envs') and self.envs:
+                try:
+                    print("Destroying camera sensor...")
+                    self.gym.destroy_camera_sensor(self.envs[0], self.camera_handle)
+                except Exception as e:
+                    print(f"Error destroying camera sensor: {e}")
+            self.camera_handle = None # Mark as destroyed
+
+        # Call parent's close method to clean up sim, etc.
+        super().close()
+        print("HeadlessEnv closed.")
 
 from ref_motion import ReferenceMotion
 import numpy as np
