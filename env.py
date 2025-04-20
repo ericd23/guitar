@@ -548,7 +548,7 @@ class HeadlessEnv(Env):
 
         # Set camera location (adjust these values as needed for your scene)
         # Example: look at the origin from a distance
-        camera_position = gymapi.Vec3(0.5, -1.5, 1.2) # Example position
+        camera_position = gymapi.Vec3(0.5, 0.5, 1.2) # Example position
         camera_target = gymapi.Vec3(0.0, 0.0, 0.6)    # Example target
         self.gym.set_camera_location(self.camera_handle, self.envs[0], camera_position, camera_target)
         print(f"Camera location set: pos={camera_position}, target={camera_target}")
