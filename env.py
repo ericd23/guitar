@@ -3,6 +3,7 @@ from collections import namedtuple
 import os
 from isaacgym import gymapi, gymtorch
 import torch
+import queue, threading
 
 from utils import heading_zup, axang2quat, rotatepoint, quatconj, quatmultiply
 
@@ -476,6 +477,20 @@ class HeadlessEnv(Env):
             self.record_path, fourcc, self.fps, (self.cam_width, self.cam_height)
         )
 
+        self._frame_queue = queue.Queue(maxsize=32)     # small buffer
+        self._writer_thread = threading.Thread(
+            target=self._write_frames_loop, daemon=True)
+        self._writer_thread.start()
+
+    def _write_frames_loop(self):
+        """Background thread: pop frames from the queue and write them."""
+        while True:
+            frame = self._frame_queue.get()
+            if frame is None:                       # sentinel -> exit
+                break
+            self.video_writer.write(frame)
+            self._frame_queue.task_done()
+
     # Override render to do nothing (no desktop window).
     def render(self):
         pass
@@ -512,8 +527,11 @@ class HeadlessEnv(Env):
         # print("Captured frame with shape:", frame_bgr.shape)
 
         # Write the frame to the video.
-        self.video_writer.write(frame_bgr)
-        
+        try:
+            self._frame_queue.put_nowait(frame_bgr)
+        except queue.Full:
+            pass                      # drop if the queue is full; avoid blocking
+
         self.frame_count += 1
         if self.max_frames is not None and self.frame_count >= self.max_frames:
             self.request_quit = True            # makes outer loop exit
@@ -522,10 +540,19 @@ class HeadlessEnv(Env):
 
     # Release resources.
     def close(self):
-        if self.video_writer is not None:
+        # tell writer thread to finish and join
+        if hasattr(self, "_frame_queue") and self._frame_queue is not None:
+            self._frame_queue.put(None)  # sentinel
+            self._writer_thread.join()
+            self._frame_queue = None
+
+        if hasattr(self, "video_writer") and self.video_writer is not None:
             self.video_writer.release()
-        if self.camera_handle is not None:
+
+        if hasattr(self, "camera_handle") and self.camera_handle is not None:
             self.gym.destroy_camera_sensor(self.envs[0], self.camera_handle)
+
+        # call parent close (if defined)
         if hasattr(super(), "close"):
             super().close()
 
