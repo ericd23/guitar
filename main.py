@@ -71,10 +71,27 @@ parser.add_argument(
     help="Frames per second (fps) for recording the video.",
 )
 
+parser.add_argument(
+    "--capture-stride",
+    type=int,
+    default=1,
+    metavar="N",
+    help="Only capture/render every N‑th physics step (default 1 = no skipping).",
+)
+parser.add_argument(
+    "--greyscale",
+    action="store_true",
+    default=False,
+    help="Record in greyscale instead of RGB.",
+)
+
 settings = parser.parse_args()
 
 if settings.headless and settings.record is None:
     parser.error("--record must be supplied when --headless is set")
+
+if settings.capture_stride < 1:
+    parser.error("--capture-stride must be ≥ 1")
 
 TRAINING_PARAMS = dict(
     horizon = 8,
@@ -496,6 +513,8 @@ if __name__ == "__main__":
                 cam_height=settings.height,
                 max_frames=settings.frames,
                 fps=settings.fps,
+                capture_stride=settings.capture_stride,  #  NEW
+                greyscale=settings.greyscale,  #  NEW
             )
         )
 

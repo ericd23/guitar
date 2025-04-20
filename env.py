@@ -443,7 +443,7 @@ import numpy as np
 
 class HeadlessEnv(Env):
     def __init__(
-        self, *args, record_path="output.mp4", cam_width=1920, cam_height=1080, max_frames=None, fps=30, **kwargs
+        self, *args, record_path="output.mp4", cam_width=1920, cam_height=1080, max_frames=None, fps=30, capture_stride=1, greyscale=False, **kwargs
     ):
         # Call parent initialization; ensure the simulation was created with graphics_device=0.
         super().__init__(*args, **kwargs)
@@ -455,6 +455,8 @@ class HeadlessEnv(Env):
         self.max_frames  = max_frames
         self.frame_count = 0
         self.fps = fps
+        self.capture_stride = capture_stride       #  NEW
+        self.greyscale   = greyscale               #  NEW
         camera_props = gymapi.CameraProperties()
         camera_props.width = self.cam_width
         camera_props.height = self.cam_height
@@ -473,7 +475,7 @@ class HeadlessEnv(Env):
         # Set up OpenCV video writer with the new resolution.
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 'mp4v' codec in lowercase
         self.video_writer = cv2.VideoWriter(
-            self.record_path, fourcc, self.fps, (self.cam_width, self.cam_height)
+            self.record_path, fourcc, self.fps, (self.cam_width, self.cam_height), isColor=(not self.greyscale)
         )
 
     # Override render to do nothing (no desktop window).
@@ -512,7 +514,18 @@ class HeadlessEnv(Env):
         # print("Captured frame with shape:", frame_bgr.shape)
 
         # Write the frame to the video.
-        self.video_writer.write(frame_bgr)
+        if self.frame_count % self.capture_stride == 0:
+            self.gym.render_all_camera_sensors(self.sim)
+            img = self.gym.get_camera_image(self.sim, self.envs[0],
+                                            self.camera_handle, gymapi.IMAGE_COLOR)
+            frame_rgba = np.array(img).reshape(self.cam_height, self.cam_width, 4)
+
+            if self.greyscale:
+                frame_out = cv2.cvtColor(frame_rgba, cv2.COLOR_RGBA2GRAY)
+            else:
+                frame_out = cv2.cvtColor(frame_rgba, cv2.COLOR_RGBA2BGR)
+
+            self.video_writer.write(frame_out)
         
         self.frame_count += 1
         if self.max_frames is not None and self.frame_count >= self.max_frames:
