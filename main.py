@@ -64,6 +64,13 @@ parser.add_argument(
     help="Total frames to simulate (used only when we are recording).",
 )
 
+parser.add_argument(
+    "--fps",
+    type=int,
+    default=30,
+    help="Frames per second (fps) for recording the video.",
+)
+
 settings = parser.parse_args()
 
 if settings.headless and settings.record is None:
@@ -482,12 +489,15 @@ if __name__ == "__main__":
     )
 
     if settings.record is not None:
-        env_kwargs.update(dict(
-            record_path=settings.record,
-            cam_width=settings.width,
-            cam_height=settings.height,
-            max_frames=settings.frames      # <-- add this line
-        ))
+        env_kwargs.update(
+            dict(
+                record_path=settings.record,
+                cam_width=settings.width,
+                cam_height=settings.height,
+                max_frames=settings.frames,
+                fps=settings.fps,
+            )
+        )
 
     env = env_cls(num_envs, **env_kwargs)
 
