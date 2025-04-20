@@ -100,6 +100,8 @@ class Env(object):
         self.act_dim = self.action_scale.size(-1)
         self.ob_dim = self.observe().size(-1)
         self.rew_dim = self.reward().size(-1)
+        
+        self._tick = lambda n=1: None
 
         for i in range(self.gym.get_actor_count(self.envs[0])):
             rigid_body = self.gym.get_actor_rigid_body_dict(self.envs[0], i)
@@ -405,6 +407,9 @@ class Env(object):
         self.info["terminate"] = terminate
         self.obs = self.observe()
         self.request_quit = False if self.viewer is None else self.gym.query_viewer_has_closed(self.viewer)
+        
+        self._tick()
+
         return self.obs, rewards, self.done, self.info
 
     def apply_actions(self, actions):
@@ -477,6 +482,8 @@ class HeadlessEnv(Env):
         self.video_writer = cv2.VideoWriter(
             self.record_path, fourcc, self.fps, (self.cam_width, self.cam_height), isColor=(not self.greyscale)
         )
+        
+        self._tick = lambda n=1: None
 
     # Override render to do nothing (no desktop window).
     def render(self):
@@ -526,6 +533,7 @@ class HeadlessEnv(Env):
                 frame_out = cv2.cvtColor(frame_rgba, cv2.COLOR_RGBA2BGR)
 
             self.video_writer.write(frame_out)
+            self._tick()
         
         self.frame_count += 1
         if self.max_frames is not None and self.frame_count >= self.max_frames:

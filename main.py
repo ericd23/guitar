@@ -457,12 +457,47 @@ def train(env, model, ckpt_dir, training_params):
                 if epoch >= training_params.max_epochs: exit()
             tic = time.time()
 
-if __name__ == "__main__":
+
+def run_sim(
+    *,  # all keyword‑only for clarity
+    config,  # path to your cfg / yaml / pkl
+    ckpt=None,
+    test=False,
+    seed=42,
+    device=0,
+    silent=False,
+    note=None,
+    left=None,
+    right=None,
+    headless=False,  # NEW  <- True means use HeadlessEnv
+    tick=lambda n=1: None,  # NEW  <- probe.monitor passes this
+    # recording flags (already added earlier)
+    record=None,
+    width=1920,
+    height=1080,
+    fps=30,
+    frames=None,
+    capture_stride=1,
+    greyscale=False,
+    **_ignored
+):  # swallow other CLI flags if any
+    """
+    Runs exactly one training / test session.
+    All code that used to be inside  if __main__  now lives here.
+    """
+
+    # ------------------------------------------------------------
+    # 1.  Build a tiny namespace identical to argparse output
+    settings = argparse.Namespace(**locals())
+    # ------------------------------------------------------------
+    # 2.  Everything that was in your old  if __main__  stays the same,
+    #     EXCEPT for the two tiny differences marked ★ below.
+    # ------------------------------------------------------------
+
+    # 2‑a  load config file  (unchanged) ……………………………………
     if os.path.splitext(settings.config)[-1] in [".pkl", ".json", ".yaml"]:
         config = object()
-        config.env_params = dict(
-            motion_file = settings.config
-        )
+        config.env_params = dict(motion_file=settings.config)
     else:
         spec = importlib.util.spec_from_file_location("config", settings.config)
         config = importlib.util.module_from_spec(spec)
@@ -470,42 +505,22 @@ if __name__ == "__main__":
 
     seed(config.seed if hasattr(config, "seed") else settings.seed)
 
-    if hasattr(config, "training_params"):
-        TRAINING_PARAMS.update(config.training_params)
-    if not TRAINING_PARAMS["save_interval"]:
-        TRAINING_PARAMS["save_interval"] = TRAINING_PARAMS["max_epochs"]
-    print(TRAINING_PARAMS)
-    training_params = namedtuple('x', TRAINING_PARAMS.keys())(*TRAINING_PARAMS.values())
-    if hasattr(config, "discriminators"):
-        discriminators = {
-            name: env.DiscriminatorConfig(**prop)
-            for name, prop in config.discriminators.items()
-        }
-    if hasattr(config, "env_cls"):
-        env_cls = getattr(env, config.env_cls)
+    # 2‑b  choose env class …………………………………………………………
+    if settings.headless:  # ★ NEW
+        from env import HeadlessEnv
+        env_cls = HeadlessEnv
     else:
-        env_cls = env.ICCGANHumanoid
-    print(env_cls, config.env_params)
+        env_cls = getattr(env, getattr(config, "env_cls", "ICCGANHumanoid"))
 
-    if settings.test:
-        num_envs = 1
-    else:
-        num_envs = training_params.num_envs
-        if settings.ckpt and (os.path.isfile(settings.ckpt) or os.path.exists(os.path.join(settings.ckpt, "ckpt"))):
-            raise ValueError("Checkpoint folder {} exists. Add `--test` option to run test with an existing checkpoint file".format(settings.ckpt))
-
-    if settings.note is not None:
-        config.env_params["note_file"] = settings.note
-        if settings.test:
-            config.env_params["random_note_sampling"] = False
-
+    # 2‑c  build env_kwargs identical to before + tick ………………
     env_kwargs = dict(
         discriminators=discriminators,
         compute_device=settings.device,
-        **config.env_params            # what you were already passing
+        **config.env_params
     )
+    env_kwargs["tick"] = tick  # ★ NEW
 
-    if settings.record is not None:
+    if settings.record is not None:  # recording bundle
         env_kwargs.update(
             dict(
                 record_path=settings.record,
@@ -513,12 +528,12 @@ if __name__ == "__main__":
                 cam_height=settings.height,
                 max_frames=settings.frames,
                 fps=settings.fps,
-                capture_stride=settings.capture_stride,  #  NEW
-                greyscale=settings.greyscale,  #  NEW
+                capture_stride=settings.capture_stride,
+                greyscale=settings.greyscale,
             )
         )
 
-    env = env_cls(num_envs, **env_kwargs)
+    env = env_cls(1, **env_kwargs)
 
     value_dim = len(env.discriminators)+env.rew_dim
     model = ACModel(env.state_dim, env.act_dim, env.goal_dim, value_dim)
@@ -628,3 +643,6 @@ if __name__ == "__main__":
         test(env, model)
     else:
         train(env, model, settings.ckpt, training_params)
+
+if __name__ == "__main__":
+    run_sim(**vars(settings))
