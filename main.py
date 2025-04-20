@@ -57,6 +57,13 @@ parser.add_argument(
     help="Video height in pixels (only used with --record).",
 )
 
+parser.add_argument(
+    "--frames",
+    type=int,
+    default=None,
+    help="Total frames to simulate (used only when we are recording).",
+)
+
 settings = parser.parse_args()
 
 if settings.headless and settings.record is None:
@@ -474,11 +481,12 @@ if __name__ == "__main__":
         **config.env_params            # what you were already passing
     )
 
-    if settings.record is not None:        # i.e. --record was used
+    if settings.record is not None:
         env_kwargs.update(dict(
             record_path=settings.record,
             cam_width=settings.width,
-            cam_height=settings.height
+            cam_height=settings.height,
+            max_frames=settings.frames      # <-- add this line
         ))
 
     env = env_cls(num_envs, **env_kwargs)
