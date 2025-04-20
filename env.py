@@ -443,7 +443,7 @@ import numpy as np
 
 class HeadlessEnv(Env):
     def __init__(
-        self, *args, record_path="output.mp4", cam_width=1920, cam_height=1080, **kwargs
+        self, *args, record_path="output.mp4", cam_width=1920, cam_height=1080, max_frames=None, **kwargs
     ):
         # Call parent initialization; ensure the simulation was created with graphics_device=0.
         super().__init__(*args, **kwargs)
@@ -452,6 +452,8 @@ class HeadlessEnv(Env):
         self.cam_width  = cam_width
         self.cam_height = cam_height
         self.record_path = record_path
+        self.max_frames  = max_frames
+        self.frame_count = 0
         camera_props = gymapi.CameraProperties()
         camera_props.width = self.cam_width
         camera_props.height = self.cam_height
@@ -510,6 +512,10 @@ class HeadlessEnv(Env):
 
         # Write the frame to the video.
         self.video_writer.write(frame_bgr)
+        
+        self.frame_count += 1
+        if self.max_frames is not None and self.frame_count >= self.max_frames:
+            self.request_quit = True            # makes outer loop exit
 
         return obs, rewards, dones, info
 
