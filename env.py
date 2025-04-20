@@ -442,53 +442,58 @@ import cv2
 import numpy as np
 
 class HeadlessEnv(Env):
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self, *args, record_path="output.mp4", cam_width=1920, cam_height=1080, **kwargs
+    ):
         # Call parent initialization; ensure the simulation was created with graphics_device=0.
         super().__init__(*args, **kwargs)
-        
+
         # Increase resolution: set to Full HD 1920x1080.
-        self.cam_width = 1920
-        self.cam_height = 1080
+        self.cam_width  = cam_width
+        self.cam_height = cam_height
+        self.record_path = record_path
         camera_props = gymapi.CameraProperties()
         camera_props.width = self.cam_width
         camera_props.height = self.cam_height
         camera_props.enable_tensors = True  # if you need tensor access
-        
+
         # Create the camera sensor on one of your environments (e.g. the first one).
         self.camera_handle = self.gym.create_camera_sensor(self.envs[0], camera_props)
-        
+
         # Change the camera position to be closer to the guitar.
         # For example, if the guitar is near the origin, move the camera closer.
         # Adjust these vectors as needed.
         camera_position = gymapi.Vec3(0.5, 0.5, 1.2)  # Closer than (2.0, 2.0, 2.0)
         camera_target = gymapi.Vec3(0.0, 0.0, 0.6)      # Assuming the guitar is at the origin
         self.gym.set_camera_location(self.camera_handle, self.envs[0], camera_position, camera_target)
-        
+
         # Set up OpenCV video writer with the new resolution.
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 'mp4v' codec in lowercase
-        self.video_writer = cv2.VideoWriter('output.mp4', fourcc, self.fps, (self.cam_width, self.cam_height))
-    
+        self.video_writer = cv2.VideoWriter(
+            self.record_path, fourcc, self.fps, (self.cam_width, self.cam_height)
+        )
+
     # Override render to do nothing (no desktop window).
     def render(self):
         pass
-    
+
     # Override update_viewer to do nothing in headless mode.
     def update_viewer(self):
         pass
-    
+
     # Override step() to capture a frame each step.
     def step(self, actions):
         obs, rewards, dones, info = super().step(actions)
-        
+
         # Step the graphics pipeline and fetch results so that the offscreen buffer updates.
         self.gym.step_graphics(self.sim)
         self.gym.fetch_results(self.sim, True)
         self.gym.render_all_camera_sensors(self.sim)
-        
+
         # Retrieve the camera image.
         # The API requires: (sim, env, camera_handle, image_type)
         img = self.gym.get_camera_image(self.sim, self.envs[0], self.camera_handle, gymapi.IMAGE_COLOR)
-        
+
         # IsaacGym returns a flat buffer (likely in RGBA format).
         # Reshape the image to (height, width, 4).
         try:
@@ -496,18 +501,18 @@ class HeadlessEnv(Env):
         except Exception as e:
             print("Error reshaping image:", e)
             frame_rgba = np.zeros((self.cam_height, self.cam_width, 4), dtype=np.uint8)
-        
+
         # Convert RGBA to BGR for OpenCV.
         frame_bgr = cv2.cvtColor(frame_rgba, cv2.COLOR_RGBA2BGR)
-        
+
         # Print out the frame shape for verification.
         # print("Captured frame with shape:", frame_bgr.shape)
-        
+
         # Write the frame to the video.
         self.video_writer.write(frame_bgr)
-        
+
         return obs, rewards, dones, info
-    
+
     # Release resources.
     def close(self):
         if self.video_writer is not None:
@@ -908,7 +913,7 @@ class ICCGANHumanoid(HeadlessEnv):
                     self.real_samples[i][n] = v.to(self.device)
         return self.real_samples.pop()
 
-#@torch.jit.script
+# @torch.jit.script
 def observe_iccgan(state_hist: torch.Tensor, seq_len: Optional[torch.Tensor]=None,
     key_links: Optional[List[int]]=None, parent_link: Optional[int]=None,
     include_velocity: bool=True, local_pos: Optional[bool]=None
@@ -2153,7 +2158,6 @@ class ICCGANRightHand(ICCGANHandBase):
             l = np.concatenate((s0, s1), -1)
             c = [[1.,0.,1.] if not pluck_correct[i, j] else [1.,0.,0.] if goal[i,j] else [0.,1.,0] if goal_[i, j] else [0.,0.,0.] for j in range(len(l))]
             self.gym.add_lines(self.viewer, e, len(l), np.float32(l), np.float32(c))
-
 
 
 class ICCGANTwoHands(ICCGANHandBase):

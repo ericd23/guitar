@@ -32,7 +32,35 @@ parser.add_argument("--left", type=str, default=None,
 parser.add_argument("--right", type=str, default=None,
     help="Checkpoint directory or file for right-hand policy training or evaluation.")
 
+parser.add_argument(
+    "--headless",
+    action="store_true",
+    default=False,
+    help="Run the simulation without an on–screen viewer (stub for now).",
+)
+parser.add_argument(
+    "--record",
+    type=str,
+    default=None,
+    help="Path of the output video file (REQUIRED if --headless).",
+)
+parser.add_argument(
+    "--width",
+    type=int,
+    default=1920,
+    help="Video width in pixels (only used with --record).",
+)
+parser.add_argument(
+    "--height",
+    type=int,
+    default=1080,
+    help="Video height in pixels (only used with --record).",
+)
+
 settings = parser.parse_args()
+
+if settings.headless and settings.record is None:
+    parser.error("--record must be supplied when --headless is set")
 
 TRAINING_PARAMS = dict(
     horizon = 8,
@@ -440,11 +468,21 @@ if __name__ == "__main__":
         if settings.test:
             config.env_params["random_note_sampling"] = False
 
-    env = env_cls(num_envs,
+    env_kwargs = dict(
         discriminators=discriminators,
         compute_device=settings.device,
-        **config.env_params
+        **config.env_params            # what you were already passing
     )
+
+    if settings.record is not None:        # i.e. --record was used
+        env_kwargs.update(dict(
+            record_path=settings.record,
+            cam_width=settings.width,
+            cam_height=settings.height
+        ))
+
+    env = env_cls(num_envs, **env_kwargs)
+
     value_dim = len(env.discriminators)+env.rew_dim
     model = ACModel(env.state_dim, env.act_dim, env.goal_dim, value_dim)
     discriminators = torch.nn.ModuleDict({
